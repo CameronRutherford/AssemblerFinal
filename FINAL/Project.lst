@@ -1,0 +1,1087 @@
+Microsoft (R) Macro Assembler Version 14.10.25019.0	    12/11/17 15:21:07
+AddTwo.asm						     Page 1 - 1
+
+
+				; Description: Stacker game using only assembler
+				; Revision date: 12/11/2017
+				; By: Cameron Rutherford, Tristan Hildahl, Tyler Stitt
+
+				;For Irvine functions
+				INCLUDE Irvine32.inc
+			      C ; Include file for Irvine32.lib             (Irvine32.inc)
+			      C 
+			      C ;OPTION CASEMAP:NONE		; optional: make identifiers case-sensitive
+			      C 
+			      C INCLUDE SmallWin.inc		; MS-Windows prototypes, structures, and constants
+			      C .NOLIST
+			      C .LIST
+			      C 
+			      C INCLUDE VirtualKeys.inc
+			      C ; VirtualKeys.inc
+			      C .NOLIST
+			      C .LIST
+			      C 
+			      C 
+			      C .NOLIST
+			      C .LIST
+			      C 
+
+				;C/C++ functions used in the program.
+				_kbhit PROTO C
+				getch PROTO C   
+
+				;A few constansts that really help with 
+ = 00000028			startWidth EQU 40
+ = 00000032			maxRight EQU 50				;this must be at least one bigger than startWidth
+ = 00000033			cursorMax EQU maxRight + 1
+ = 00000003			bufferSIZE EQU 3
+
+ 00000000			.data
+
+ 00000000 0002			lagCheckLow WORD 2		;used to manipulate the speed at which the game updates
+ 00000002 000A			lagLow WORD 10
+ 00000004 0008			lagCheck WORD 8
+ 00000006 00			lagCounter BYTE 0
+ 00000007 28			lag BYTE 40
+
+ 00000008 57 65 6C 63 6F	intromessage BYTE "Welcome To Stacker!                   High Score: ",0
+	   6D 65 20 54 6F
+	   20 53 74 61 63
+	   6B 65 72 21 20
+	   20 20 20 20 20
+	   20 20 20 20 20
+	   20 20 20 20 20
+	   20 20 20 48 69
+	   67 68 20 53 63
+	   6F 72 65 3A 20
+	   00
+ 0000003B 47 41 4D 45 20	EndMessage BYTE "GAME OVER!",0
+	   4F 56 45 52 21
+	   00
+ 00000046 59 6F 75 20 66	message1 BYTE "You failed on level ",0
+	   61 69 6C 65 64
+	   20 6F 6E 20 6C
+	   65 76 65 6C 20
+	   00
+ 0000005B 4E 65 77 20 68	successMessage BYTE "New high score!",0
+	   69 67 68 20 73
+	   63 6F 72 65 21
+	   00
+
+ 0000006B FF			prevLeft BYTE -1		;used to store the block's position on the previous level.
+ 0000006C FF			prevRight BYTE -1		;set to -1 to make the first check easy
+
+ 0000006D 00			oldLeft BYTE 0			;both are used to store the position of the block one "tick" beforehand
+ 0000006E 00			oldRight BYTE 0
+
+ 0000006F 00			currentLeft BYTE 0		;all are used to store the block's current properties
+ 00000070 28			currentRight BYTE startWidth
+ 00000071 28			CurrentWidth BYTE startWidth
+ 00000072 01			velocity BYTE 1
+ 00000073 01			currentY BYTE 1
+ 00000074 01			currentColor BYTE 1
+
+ 00000075 68 69 67 68 73	filename BYTE "highscore.txt",0		;Things used for the file I/O
+	   63 6F 72 65 2E
+	   74 78 74 00
+ 00000083  00000003 [		buffer BYTE bufferSIZE DUP(?)
+	    00
+	   ]
+ 00000086 00			highScore BYTE ?
+ 00000087 00000000		fileHandle DWORD ?
+
+ 00000000			.code
+				;---------------------------------------------------------
+ 00000000			updateHighScore PROC
+				;
+				; Checks to see if the current high score is a new high score,
+				; If it is a new highscore, then update the high score and display a message,
+				; Otherwise exit the whole program and return control to the OS.
+				; Returning control here was necessary for some reason as the ret command
+				; from this function seemed to break the program.
+				; Receives:	The current high score from highScore and the current score from currentY
+				;			Gets the file handle from the predefined filename data
+				; Returns: nothing
+				; Requires: nothing
+				;---------------------------------------------------------
+ 00000000  A0 00000073 R		mov al, currentY
+ 00000005  2C 02			sub al, 2			;Need to sub 2 from current Y to have consistency with what is displayed as your "score"
+ 00000007  8A 25 00000086 R		mov ah, highScore
+ 0000000D  3A C4			cmp al, ah			;Compare your score to the current high score
+ 0000000F  7E 7F			jle unlucky			;If your score wasn't high enough, end the program. Otherwise update the high score 
+ 00000011  A2 00000086 R		mov highScore, al	;Store the new highscore
+ 00000016  BA 0000005B R		mov edx, OFFSET successMessage		
+ 0000001B  E8 00000000 E		call WriteString		;Output the sucess message
+ 00000020  E8 00000000 E		call crlf
+
+					;The goal of this loop is to store the string version of the high score into buffer
+					;Due to there not being an int to string function, this nested loop effectively assumes
+					;the lowest possible high score is 10 and the highest is 100, and counts up from there 
+					;to 100 constantly checking to see if the scores match. Once they do, it jumps out of the loops.
+
+ 00000025  C6 05 00000083 R	 	mov buffer[0], 030h	;Initialize the first digit to 0
+	   30
+ 0000002C			L1:
+ 0000002C  C6 05 00000084 R		mov buffer[1], 030h	;Initialize the second digit to 0
+	   30
+ 00000033  B9 0000000A			mov ecx, 10			;Count through from 0-9
+ 00000038				L2:
+ 00000038  51					push ecx		;This is recquired to maintain the loop counter
+ 00000039  BA 00000083 R			mov edx, OFFSET buffer
+ 0000003E  B9 00000003				mov ecx, bufferSIZE
+ 00000043  E8 00000000 E			call ParseDecimal32		;Convert the current number we are checking to a decimal
+ 00000048  3A 05 00000086 R			cmp al, highScore		;See if we are at the high score
+ 0000004E  74 11				je foundHigh			;If we have found it, get out of here
+ 00000050  FE 05 00000084 R			inc buffer[1]			;Otherwise keep counting
+ 00000056  59					pop ecx
+ 00000057  E2 DF			loop L2
+ 00000059  FE 05 00000083 R		inc buffer[0]
+ 0000005F  EB CB		jmp L1
+
+					;Now that we have the string version of the high score...
+
+ 00000061			foundHigh:
+
+ 00000061  C6 05 00000085 R		mov buffer[2], 0	;make sure it is null terminating
+	   00
+
+					;Write the new high score to the file
+
+ 00000068  BA 00000075 R		mov	edx, OFFSET filename	
+ 0000006D  E8 00000000 E		call CreateOutputFile
+ 00000072  A3 00000087 R		mov fileHandle, eax
+ 00000077  BA 00000083 R		mov edx, OFFSET buffer
+ 0000007C  B9 00000003			mov ecx, bufferSIZE
+ 00000081  E8 00000000 E		call WriteToFile
+ 00000086  A1 00000087 R		mov eax, fileHandle
+ 0000008B  E8 00000000 E		call CloseFile
+
+					;Do this regardless of if there is a new high score or not
+
+					;This is the solution we came up with to avoid our program crashing each time the game ended
+					;By exiting the whole program here, we avoided the issue and still maintained desirable behaviour
+
+					;This loop effectively waits for the user to press a button to end the program, as otherwise the program quits instantly
+ 00000090			unlucky:
+ 00000090  E8 00000000 E		call _kbhit
+ 00000095  83 F8 00			cmp eax, 0
+ 00000098  75 F6			jne unlucky
+
+
+					INVOKE exitProcess, 0	;Exit the whole program.
+ 0000009A  6A 00	   *	    push   +000000000h
+ 0000009C  E8 00000000 E   *	    call   ExitProcess
+ 000000A1  C3				ret						;This line is never hit.
+ 000000A2			updateHighScore ENDP
+				;---------------------------------------------------------
+ 000000A2			displayCurrentHighScore PROC
+				;
+				; Outputs the current high score to the screen and modifies the high score
+				; memory to contain the current high score for later use.
+				; Receives:	Gets the file handle from the predefined filename data
+				; Returns: nothing
+				; Requires: nothing
+				;---------------------------------------------------------
+					
+					;Open the file and read from it
+ 000000A2  BA 00000075 R		mov	edx,OFFSET filename 
+ 000000A7  E8 00000000 E		call OpenInputFile 
+ 000000AC  A3 00000087 R		mov fileHandle, eax
+ 000000B1  BA 00000083 R		mov edx, OFFSET buffer
+ 000000B6  B9 00000003			mov ecx, bufferSIZE
+ 000000BB  E8 00000000 E		call ReadFromFile
+
+					;Convert the string stored into an integer
+ 000000C0  BA 00000083 R		mov edx, OFFSET buffer
+ 000000C5  B9 00000003			mov ecx, bufferSIZE
+ 000000CA  E8 00000000 E		call ParseDecimal32
+
+ 000000CF  A2 00000086 R		mov highScore, al	;Store the high score
+ 000000D4  E8 00000000 E		call WriteDec		;Output the high score
+ 000000D9  A1 00000087 R		mov eax, fileHandle	
+ 000000DE  E8 00000000 E		call CloseFile		;Close the file
+ 000000E3  E8 00000000 E		call crlf
+ 000000E8  C3				ret
+ 000000E9			displayCurrentHighScore ENDP
+
+
+				;---------------------------------------------------------
+ 000000E9			GameOver PROC
+				;
+				; Outputs the game over message
+				; Receives:	nothing
+				; Returns: nothing
+				; Requires: dh to have current y already in it, which it
+				;			does when the function is called.
+				;---------------------------------------------------------
+ 000000E9  B2 00			mov dl, 0
+ 000000EB  E8 00000000 E		call Gotoxy	;Go to the right place in the screen - bottom left corner
+ 000000F0  E8 00000000 E		call crlf	;endl
+
+ 000000F5  BA 0000003B R		mov  edx,OFFSET EndMessage	;cout << "GAME OVER" << endl;
+ 000000FA  E8 00000000 E	    call WriteString 
+ 000000FF  E8 00000000 E		call crlf
+
+ 00000104  BA 00000046 R		mov  edx,OFFSET message1	;cout << "You failed on level " << currentY - 1 <<  endl;
+ 00000109  E8 00000000 E		call WriteString
+ 0000010E  A0 00000073 R		mov al, currentY
+ 00000113  FE C8			dec al
+ 00000115  E8 00000000 E		call WriteDec
+ 0000011A  E8 00000000 E		call crlf
+
+ 0000011F  C3				ret
+ 00000120			GameOver ENDP
+
+
+				;---------------------------------------------------------
+ 00000120			updateSpeed PROC
+				;
+				; Manipulates the lag variable in a specific way to make the game
+				; speed up at a faster rate over time, whilst also having a hard floor
+				; in terms of both the speed of the game and the rate of change.
+				; Receives: global variables
+				; Returns: modivied global variables
+				; Requires: nothing
+				;---------------------------------------------------------
+ 00000120  60				pushad
+
+ 00000121  FE 05 00000006 R		inc lagCounter
+ 00000127  0F B6 05			movzx eax, lagCounter
+	   00000006 R
+ 0000012E  66| 2B 05			sub ax, lagCheck	;Check to see if we have passed the point at which the speed needs to be changed
+	   00000004 R
+ 00000135  75 46			jnz neverMind		;If the speed doesn't need to be changed, skip the following code and exit the function
+
+ 00000137  C6 05 00000006 R		mov lagCounter, 0	;Reset the lag counter
+	   00
+ 0000013E  A0 00000007 R		mov al, lag			;Decrement lag by 5
+ 00000143  2C 05			sub al, 5
+ 00000145  66| 3B 05			cmp ax, lagLow		;If the lag is below the pre-determined lowest lag,
+	   00000002 R
+ 0000014C  66| 0F 42 05			cmovb ax, lagLow	;Hard reset it back to the lowest possible
+	   00000002 R
+ 00000154  A2 00000007 R		mov lag, al			;Re-store lag into memory
+ 00000159  66| FF 0D			dec lagCheck		;Increase the rate of change
+	   00000004 R
+
+ 00000160  0F B7 1D			movzx ebx, lagCheck	;Check to see if the lag check is below the pre-determined lowest
+	   00000004 R
+ 00000167  66| 3B 1D			cmp bx, lagCheckLow
+	   00000000 R
+ 0000016E  66| 0F 42 1D			cmovb bx, lagCheckLow	;Set it to the lowest if it is
+	   00000000 R
+ 00000176  66| 89 1D			mov lagCheck, bx		;Re-store lagCheck once done
+	   00000004 R
+
+ 0000017D			neverMind:
+ 0000017D  61				popad
+ 0000017E  C3				ret
+ 0000017F			updateSpeed ENDP
+
+				;---------------------------------------------------------
+ 0000017F			fancyColor PROC
+				;
+				; Used to set the color to a different color depending on what
+				; current color is. Since current color is updated after every new line,
+				; the function makes it so every color excluding black is cycled through.
+				; Receives: global variables
+				; Returns: the text color set to be something consistent with the currentColor
+				; Requires: nothing
+				;---------------------------------------------------------
+ 0000017F  60				pushad
+ 00000180			GoOn:
+ 00000180  BA 00000000			mov edx, 0					; Full disclosure, I still do not fully understand how this works
+ 00000185  0F B6 05			movzx eax, currentColor		; This being the div instruction. But it does.
+	   00000074 R
+ 0000018C  B9 00000001			mov ecx, 01h				
+ 00000191  F7 F1			div ecx
+ 00000193  8A D0			mov dl, al					;edx has the result of the division.
+
+ 00000195  C0 E0 04			shl al, 4					;Do some bit shifting magic to ensure the color is properly in al.
+ 00000198  8A E2			mov ah, dl
+ 0000019A  66| C1 E8 04			shr ax, 4
+
+ 0000019E  3C 00			cmp al, 0					;If we have got to black, go to the next color and try again.
+ 000001A0  74 07			je ChangeColor
+
+ 000001A2  E8 00000000 E		call setTextColor			;Set the text color and exit the function
+
+ 000001A7  61				popad
+ 000001A8  C3				ret
+
+ 000001A9			ChangeColor:
+ 000001A9  FE 05 00000074 R		inc currentColor
+ 000001AF  EB CF			jmp GoOn
+
+ 000001B1			fancyColor ENDP
+
+
+
+ 000001B1			asmMain PROC C
+
+					;Write the intro message and display the current high score.
+ 000001B1  E8 00000000 E		call Clrscr
+ 000001B6  BA 00000008 R		mov  edx,OFFSET intromessage
+ 000001BB  E8 00000000 E	    call WriteString 
+ 000001C0  E8 FFFFFEDD			call displayCurrentHighScore
+ 000001C5  E8 00000000 E		call crlf
+
+					;The "start" of the infinite loop that the game runs on until you lose...
+					;This is jumped to every time a new level is successfully reached.
+
+ 000001CA			reDrawBlock:					;Draw the block, wherever it is, at the start of each level.
+
+ 000001CA  A0 0000006F R		mov al, currentLeft			;Do some arithmetic to ensure that CurrentRight is correct
+ 000001CF  02 05 00000071 R		add al, CurrentWidth		;Since the block shrinks in size, this is necessary to avoid incorrect starting sizes
+ 000001D5  A2 00000070 R		mov CurrentRight, al
+
+ 000001DA  B9 00000000			mov ecx, 0					;Set up the loop counter to draw every character in the block
+ 000001DF  8A 0D 00000071 R		mov cl, CurrentWidth
+ 000001E5  FE C1			inc cl
+
+ 000001E7  8A 15 0000006F R		mov dl, currentLeft			;Do this outside the loop to since we are drawing from left to right, we never have to reset these.
+ 000001ED  8A 35 00000073 R		mov dh, currentY
+ 000001F3  E8 00000000 E		call Gotoxy
+ 000001F8			L1:						;Draw the block from left to right at the start
+ 000001F8  E8 FFFFFF82			call fancyColor		;Set the color based on the currentY
+ 000001FD  B0 2A			mov al, '*'
+ 000001FF  E8 00000000 E		call WriteChar
+ 00000204  E2 F2			Loop L1
+
+ 00000206  B8 0000000F			mov eax, white + (black * 16)		;Make sure to endl with black and white because otherwise each carriage return looks weird
+ 0000020B  E8 00000000 E		call SetTextColor
+ 00000210  E8 00000000 E		call crlf
+
+					;This line is jumped to every time the keyboard is polled to see if a button was pressed
+ 00000215			Move:
+
+					;This block outputs the number of the current level at the end of the line
+ 00000215  B2 33			mov dl, cursorMax
+ 00000217  8A 35 00000073 R		mov dh, currentY
+ 0000021D  E8 00000000 E		call Gotoxy
+ 00000222  B8 0000000F			mov eax, white + (black * 16)
+ 00000227  E8 00000000 E		call SetTextColor
+ 0000022C  A0 00000073 R		mov al, currentY
+ 00000231  E8 00000000 E		call WriteDec
+
+					;Wait for a bit while the current image is displayed..
+ 00000236  0F B6 05			movzx eax, lag
+	   00000007 R
+ 0000023D  E8 00000000 E		call Delay
+ 00000242  E8 00000000 E		call _kbhit			;Poll for a button being pressed
+ 00000247  83 F8 00			cmp eax, 0
+ 0000024A  0F 85 00000102		jne ButtonPressed	;if a button was pressed, go to the update section of the code. Otherwise continue
+
+					;This line is jumped to if the block is needed to be moved without polling for keyboard input
+
+ 00000250			ForceMove:
+
+					;Check to see what direction the block is moving in
+ 00000250  A0 00000072 R		mov al, velocity
+ 00000255  3C 01			cmp al, 1
+ 00000257  75 76			jne Backward	;If the block is moving backward jump to the appropriate section of code
+					
+					;Otherwise if it is moving forward...
+
+					;Check to see if it is at the max size that is predetermined.
+ 00000259  A0 00000070 R		mov al, currentRight
+ 0000025E  80 3D 00000070 R		cmp currentRight, maxRight
+	   32
+ 00000265  0F 84 000000D6		je Reverse		;If it is, change the direction the block is moving
+
+					;Otherwise update the block normally moving forward
+
+					;Update the currentRight based on oldRight, knowing al has currentRight
+ 0000026B  A2 0000006E R		mov oldRight, al
+ 00000270  FE C0			inc al
+ 00000272  A2 00000070 R		mov currentRight, al
+
+					;Update the currentLeft based on the oldLeft
+ 00000277  8A 25 0000006F R		mov ah, currentLeft
+ 0000027D  88 25 0000006D R		mov oldLeft, ah
+ 00000283  FE C4			inc ah
+ 00000285  88 25 0000006F R		mov currentLeft, ah
+
+					;Since the block is moving forward, we need to erase the trailing block, and print the new leading block
+
+					;Erasing the trailing block...
+ 0000028B  8A 15 0000006D R		mov dl, oldLeft
+ 00000291  8A 35 00000073 R		mov dh, currentY
+ 00000297  E8 00000000 E		call Gotoxy
+ 0000029C  B8 00000000			mov eax, black + (black * 16)
+ 000002A1  E8 00000000 E		call SetTextColor
+ 000002A6  B0 2A			mov al, '*'			;NB: This character can be anythign because the background and foreground are the same.
+										;	 It has been left as this everywhere as confirmation things are working as intended.
+ 000002A8  E8 00000000 E		call WriteChar
+
+					;Printing the new leading block
+ 000002AD  8A 15 00000070 R		mov dl, currentRight
+ 000002B3  8A 35 00000073 R		mov dh, currentY
+ 000002B9  E8 00000000 E		call Gotoxy
+ 000002BE  E8 FFFFFEBC			call fancyColor
+ 000002C3  B0 2A			mov al, '*'
+ 000002C5  E8 00000000 E		call WriteChar
+
+					;Start the polling again for key input and whatnot
+ 000002CA  E9 FFFFFF46			jmp Move
+
+					;Do everything similar for moving backward, with a few things flipped.
+ 000002CF			Backward:
+
+					;Check to see if it is at the min size that is predetermined.
+ 000002CF  A0 0000006F R		mov al, currentLeft
+ 000002D4  80 3D 0000006F R		cmp currentLeft, 0
+	   00
+ 000002DB  74 64			je Reverse		;If it is, change the direction the block is moving
+
+					;Otherwise update the block normally moving backward
+
+					;Update the currentLeft based on oldLeft, knowing al has currentLeft
+ 000002DD  A2 0000006D R		mov oldLeft, al
+ 000002E2  FE C8			dec al
+ 000002E4  A2 0000006F R		mov currentLeft, al
+
+					;Update the currentRight based on the oldRight
+ 000002E9  8A 25 00000070 R		mov ah, currentRight
+ 000002EF  88 25 0000006E R		mov oldRight, ah
+ 000002F5  FE CC			dec ah
+ 000002F7  88 25 00000070 R		mov currentRight, ah
+
+					;Since the block is moving backward, we need to erase the trailing block, and print the new leading block
+
+					;Erasing the trailing block...
+ 000002FD  8A 15 0000006E R		mov dl, oldRight
+ 00000303  8A 35 00000073 R		mov dh, currentY
+ 00000309  E8 00000000 E		call Gotoxy
+ 0000030E  B8 00000000	mov eax, black + (black * 16)
+ 00000313  E8 00000000 E		call SetTextColor
+ 00000318  B0 2A			mov al, '*'
+ 0000031A  E8 00000000 E		call WriteChar
+
+					;Printing the new leading block
+ 0000031F  8A 15 0000006F R		mov dl, currentLeft
+ 00000325  8A 35 00000073 R		mov dh, currentY
+ 0000032B  E8 00000000 E		call Gotoxy
+ 00000330  E8 FFFFFE4A			call fancyColor
+ 00000335  B0 2A			mov al, '*'
+ 00000337  E8 00000000 E		call WriteChar
+
+					;Start the polling again for key input and whatnot
+ 0000033C  E9 FFFFFED4			jmp Move
+
+					;This is jumped to when the direction needs reversing
+ 00000341			Reverse:
+
+ 00000341  A0 00000072 R		mov al, velocity	;Since velocity is either +/- 1, we simply neet to not al to flip it!
+ 00000346  F6 D0			not al				;So flip it!
+ 00000348  A2 00000072 R		mov velocity, al
+ 0000034D  E9 FFFFFEFE			jmp ForceMove		;Jump to ForceMove as we don't need to poll for input again when the direction changes
+
+					;This is jumped to every time the player presses a button
+ 00000352			ButtonPressed:
+
+					;This small "loop" here makes it so the input buffer cannot be flooded to cheat the game
+					;It can still kind of be done to an extent, however this makes it extremely less effective.
+ 00000352  E8 00000000 E		call getch		;used to get rid of one of the inputs in the input buffer
+ 00000357  E8 00000000 E		call _kbhit
+ 0000035C  83 F8 00			cmp eax, 0
+ 0000035F  75 F1			jne ButtonPressed	;If a button was pressed again, clear the input buffer and try again
+
+ 00000361  A0 0000006B R		mov al, prevLeft
+ 00000366  FE C0			inc al
+ 00000368  0F 84 000000BE		jz Nothing	;This jump is successfully executed after the first button press to make sure everything initializes properly.
+								;i.e. This allows for the user to determine where the initial base block is placed, avoiding using a pre-set
+
+ 0000036E  FE C8			dec al	;reset al after the check ^
+ 00000370  3A 05 0000006F R		cmp al, currentLeft ;Compare the prevLeft to currentLeft
+										;if the prevLeft is greater than current left (i.e. the left hand side is overhanging...),
+ 00000376  7F 12			jg ELeft			;then jump to the section that erases the left hanging blocks
+
+ 00000378  A0 0000006C R		mov al, prevRight		;Otherwise check to see if prevRight < currentRight (i.e the right hand side is overhanging...)
+ 0000037D  3A 05 00000070 R		cmp al, currentRight
+ 00000383  7C 50			jl ERight				;if it is, then jump to the section that erases the right hanging blocks
+
+ 00000385  E9 000000A2			jmp Nothing				;Otherwise nothing must be overhanging, so do nothing!
+
+ 0000038A			ELeft:						;Erase the left hand side of the block that is overhanging
+											;al has prevLeft
+
+ 0000038A  2A 05 0000006F R		sub al, currentLeft		;Find the change in width needed
+ 00000390  8A 15 00000071 R		mov dl, CurrentWidth
+ 00000396  2A D0			sub dl, al				;Subtract that change from the currentWidth to get a "newWidth"
+ 00000398  88 15 00000071 R		mov CurrentWidth, dl
+
+ 0000039E  B9 00000000			mov ecx, 0				;Set the loop counter and go to the "correct" spot to start erasing
+ 000003A3  8A C8			mov cl, al
+ 000003A5  8A 15 0000006F R		mov dl, currentLeft		;Since we are erasing from right to left, we only need to set the position once
+ 000003AB  8A 35 00000073 R		mov dh, currentY
+ 000003B1  E8 00000000 E		call Gotoxy
+					
+					;Erase all the hanging pieces
+ 000003B6			L2:
+ 000003B6  B8 00000000			mov eax, black + (black * 16)
+ 000003BB  E8 00000000 E		call SetTextColor
+ 000003C0  B0 2A			mov al, '*'
+ 000003C2  E8 00000000 E		call WriteChar
+ 000003C7  E2 ED			Loop L2
+
+					;Since the prevLeft doesn't need to be changed as it was "reset" by cleaning up the overhang,
+					;We only need to update the right side information
+ 000003C9  A0 00000070 R		mov al, currentRight
+ 000003CE  A2 0000006C R		mov prevRight, al
+ 000003D3  EB 6B			jmp Done		;Update to the next level!
+
+
+					;A very similar process is done for erasing the right overhang, just kind of flipped.
+ 000003D5			ERight:
+ 000003D5  A0 00000070 R		mov al, currentRight
+ 000003DA  2A 05 0000006C R		sub al, prevRight
+ 000003E0  8A 15 00000071 R		mov dl, CurrentWidth
+ 000003E6  2A D0			sub dl, al
+ 000003E8  88 15 00000071 R		mov CurrentWidth, dl
+ 000003EE  B9 00000000			mov ecx, 0
+ 000003F3  8A C8			mov cl, al
+ 000003F5  8A 15 00000070 R		mov dl, currentRight
+ 000003FB  8A 35 00000073 R		mov dh, currentY
+ 00000401  E8 00000000 E		call Gotoxy
+ 00000406			L3:
+ 00000406  B8 00000000			mov eax, black + (black * 16)
+ 0000040B  E8 00000000 E		call SetTextColor
+ 00000410  B0 2A			mov al, '*'
+ 00000412  E8 00000000 E		call WriteChar
+ 00000417  FE CA			dec dl
+ 00000419  E8 00000000 E		call Gotoxy			;Since we are erasing from right to left, we do need to manipulate the coordinates each time...
+ 0000041E  E2 E6			Loop L3
+
+ 00000420  A0 0000006F R		mov al, currentLeft
+ 00000425  A2 0000006B R		mov prevLeft, al
+ 0000042A  EB 14			jmp Done
+
+					;This is esecuted when the block was in the perfect position and nothing needed to be changed!
+					;There is still code here to make sure that initially the prevRight and prevLeft are set correctly - a small inefficiency
+ 0000042C			Nothing:
+ 0000042C  A0 00000070 R		mov al, currentRight
+ 00000431  A2 0000006C R		mov prevRight, al
+ 00000436  A0 0000006F R		mov al, currentLeft
+ 0000043B  A2 0000006B R		mov prevLeft, al
+
+					;This is called when we need to update to the next level
+ 00000440			Done:
+					;update the y value, the speed and the color
+ 00000440  FE 05 00000073 R		inc CurrentY
+ 00000446  E8 FFFFFCD5			call UpdateSpeed
+ 0000044B  FE 05 00000074 R		inc CurrentColor
+
+					;endl
+ 00000451  B8 0000000F			mov eax, white + (black * 16)		;Make sure to endl with black and white because otherwise each carriage return looks weird
+ 00000456  E8 00000000 E		call SetTextColor
+ 0000045B  E8 00000000 E		call crlf
+
+					;check to see if the current width is now <= 0. If it is jump to the game over section below
+ 00000460  A0 00000071 R		mov al, CurrentWidth
+ 00000465  3C 00			cmp al, 0
+ 00000467  7C 05			jl GameDone
+ 00000469  E9 FFFFFD5C		jmp reDrawBlock	;otherwise move onto the next level and start the loop all over again!
+ 0000046E			GameDone:		;finish the game and call the updateHighScore proc.
+ 0000046E  E8 FFFFFC76			call GameOver
+ 00000473  E8 FFFFFB88			call updateHighScore
+ 00000478  C3				ret
+ 00000479			asmMain ENDP
+				END
+Microsoft (R) Macro Assembler Version 14.10.25019.0	    12/11/17 15:21:07
+AddTwo.asm						     Symbols 2 - 1
+
+
+
+
+Structures and Unions:
+
+                N a m e                  Size
+                                         Offset      Type
+
+CONSOLE_CURSOR_INFO  . . . . . .	 00000008
+  dwSize . . . . . . . . . . . .	 00000000	 DWord
+  bVisible . . . . . . . . . . .	 00000004	 DWord
+CONSOLE_SCREEN_BUFFER_INFO . . .	 00000016
+  dwSize . . . . . . . . . . . .	 00000000	 DWord
+  dwCursorPosition . . . . . . .	 00000004	 DWord
+  wAttributes  . . . . . . . . .	 00000008	 Word
+  srWindow . . . . . . . . . . .	 0000000A	 QWord
+  dwMaximumWindowSize  . . . . .	 00000012	 DWord
+COORD  . . . . . . . . . . . . .	 00000004
+  X  . . . . . . . . . . . . . .	 00000000	 Word
+  Y  . . . . . . . . . . . . . .	 00000002	 Word
+FILETIME . . . . . . . . . . . .	 00000008
+  loDateTime . . . . . . . . . .	 00000000	 DWord
+  hiDateTime . . . . . . . . . .	 00000004	 DWord
+FOCUS_EVENT_RECORD . . . . . . .	 00000004
+  bSetFocus  . . . . . . . . . .	 00000000	 DWord
+FPU_ENVIRON  . . . . . . . . . .	 0000001C
+  controlWord  . . . . . . . . .	 00000000	 Word
+  statusWord . . . . . . . . . .	 00000004	 Word
+  tagWord  . . . . . . . . . . .	 00000008	 Word
+  instrPointerOffset . . . . . .	 0000000C	 DWord
+  instrPointerSelector . . . . .	 00000010	 DWord
+  operandPointerOffset . . . . .	 00000014	 DWord
+  operandPointerSelector . . . .	 00000018	 Word
+INPUT_RECORD . . . . . . . . . .	 00000014
+  EventType  . . . . . . . . . .	 00000000	 Word
+  Event  . . . . . . . . . . . .	 00000004	 XmmWord
+  bKeyDown . . . . . . . . . . .	 00000000	 DWord
+  wRepeatCount . . . . . . . . .	 00000004	 Word
+  wVirtualKeyCode  . . . . . . .	 00000006	 Word
+  wVirtualScanCode . . . . . . .	 00000008	 Word
+  uChar  . . . . . . . . . . . .	 0000000A	 Word
+  UnicodeChar  . . . . . . . . .	 00000000	 Word
+  AsciiChar  . . . . . . . . . .	 00000000	 Byte
+  dwControlKeyState  . . . . . .	 0000000C	 DWord
+  dwMousePosition  . . . . . . .	 00000000	 DWord
+  dwButtonState  . . . . . . . .	 00000004	 DWord
+  dwMouseControlKeyState . . . .	 00000008	 DWord
+  dwEventFlags . . . . . . . . .	 0000000C	 DWord
+  dwSize . . . . . . . . . . . .	 00000000	 DWord
+  dwCommandId  . . . . . . . . .	 00000000	 DWord
+  bSetFocus  . . . . . . . . . .	 00000000	 DWord
+KEY_EVENT_RECORD . . . . . . . .	 00000010
+  bKeyDown . . . . . . . . . . .	 00000000	 DWord
+  wRepeatCount . . . . . . . . .	 00000004	 Word
+  wVirtualKeyCode  . . . . . . .	 00000006	 Word
+  wVirtualScanCode . . . . . . .	 00000008	 Word
+  uChar  . . . . . . . . . . . .	 0000000A	 Word
+  UnicodeChar  . . . . . . . . .	 00000000	 Word
+  AsciiChar  . . . . . . . . . .	 00000000	 Byte
+  dwControlKeyState  . . . . . .	 0000000C	 DWord
+MENU_EVENT_RECORD  . . . . . . .	 00000004
+  dwCommandId  . . . . . . . . .	 00000000	 DWord
+MOUSE_EVENT_RECORD . . . . . . .	 00000010
+  dwMousePosition  . . . . . . .	 00000000	 DWord
+  dwButtonState  . . . . . . . .	 00000004	 DWord
+  dwMouseControlKeyState . . . .	 00000008	 DWord
+  dwEventFlags . . . . . . . . .	 0000000C	 DWord
+SMALL_RECT . . . . . . . . . . .	 00000008
+  Left . . . . . . . . . . . . .	 00000000	 Word
+  Top  . . . . . . . . . . . . .	 00000002	 Word
+  Right  . . . . . . . . . . . .	 00000004	 Word
+  Bottom . . . . . . . . . . . .	 00000006	 Word
+SYSTEMTIME . . . . . . . . . . .	 00000010
+  wYear  . . . . . . . . . . . .	 00000000	 Word
+  wMonth . . . . . . . . . . . .	 00000002	 Word
+  wDayOfWeek . . . . . . . . . .	 00000004	 Word
+  wDay . . . . . . . . . . . . .	 00000006	 Word
+  wHour  . . . . . . . . . . . .	 00000008	 Word
+  wMinute  . . . . . . . . . . .	 0000000A	 Word
+  wSecond  . . . . . . . . . . .	 0000000C	 Word
+  wMilliseconds  . . . . . . . .	 0000000E	 Word
+WINDOW_BUFFER_SIZE_RECORD  . . .	 00000004
+  dwSize . . . . . . . . . . . .	 00000000	 DWord
+
+
+Segments and Groups:
+
+                N a m e                 Size     Length   Align   Combine Class
+
+FLAT . . . . . . . . . . . . . .	GROUP
+STACK  . . . . . . . . . . . . .	32 Bit	 00001000 Para	  Stack	  'STACK'	 
+_DATA  . . . . . . . . . . . . .	32 Bit	 0000008B Para	  Public  'DATA'	
+_TEXT  . . . . . . . . . . . . .	32 Bit	 00000479 Para	  Public  'CODE'	
+
+
+Procedures, parameters, and locals:
+
+                N a m e                 Type     Value    Attr
+
+CloseFile  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+CloseHandle  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Clrscr . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+CreateFileA  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+CreateOutputFile . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Crlf . . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Delay  . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+DumpMem  . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+DumpRegs . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ExitProcess  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+FileTimeToDosDateTime  . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+FileTimeToSystemTime . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+FlushConsoleInputBuffer  . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+FormatMessageA . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GameOver . . . . . . . . . . . .	P Near	 000000E9 _TEXT	Length= 00000037 Public STDCALL
+GetCommandLineA  . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetCommandTail . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetConsoleCP . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetConsoleCursorInfo . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetConsoleMode . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetConsoleScreenBufferInfo . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetDateTime  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetFileTime  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetKeyState  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetLastError . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetLocalTime . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetMaxXY . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetMseconds  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetNumberOfConsoleInputEvents  .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetProcessHeap . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetStdHandle . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetSystemTime  . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetTextColor . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+GetTickCount . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Gotoxy . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+HeapAlloc  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+HeapCreate . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+HeapDestroy  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+HeapFree . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+HeapSize . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+IsDigit  . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+LocalFree  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+MessageBoxA  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+MsgBoxAsk  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+MsgBox . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+OpenInputFile  . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ParseDecimal32 . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ParseInteger32 . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+PeekConsoleInputA  . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Random32 . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+RandomRange  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Randomize  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadChar . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadConsoleA . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadConsoleInputA  . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadDec  . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadFile . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadFloat  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadFromFile . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadHex  . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadInt  . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadKeyFlush . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadKey  . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ReadString . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetConsoleCursorInfo . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetConsoleCursorPosition . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetConsoleMode . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetConsoleScreenBufferSize . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetConsoleTextAttribute  . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetConsoleTitleA . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetConsoleWindowInfo . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetFilePointer . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetLocalTime . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SetTextColor . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+ShowFPUStack . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Sleep  . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+StrLength  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Str_compare  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Str_copy . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Str_length . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Str_trim . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+Str_ucase  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+SystemTimeToFileTime . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WaitMsg  . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteBinB  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteBin . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteChar  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteConsoleA  . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteConsoleOutputAttribute  . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteConsoleOutputCharacterA . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteDec . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteFile  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteFloat . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteHexB  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteHex . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteInt . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteStackFrameName  . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteStackFrame  . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteString  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteToFile  . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+WriteWindowsMsg  . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External STDCALL
+_kbhit . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External C
+asmMain  . . . . . . . . . . . .	P Near	 000001B1 _TEXT	Length= 000002C8 Public C
+  reDrawBlock  . . . . . . . . .	L Near	 000001CA _TEXT	
+  L1 . . . . . . . . . . . . . .	L Near	 000001F8 _TEXT	
+  Move . . . . . . . . . . . . .	L Near	 00000215 _TEXT	
+  ForceMove  . . . . . . . . . .	L Near	 00000250 _TEXT	
+  Backward . . . . . . . . . . .	L Near	 000002CF _TEXT	
+  Reverse  . . . . . . . . . . .	L Near	 00000341 _TEXT	
+  ButtonPressed  . . . . . . . .	L Near	 00000352 _TEXT	
+  ELeft  . . . . . . . . . . . .	L Near	 0000038A _TEXT	
+  L2 . . . . . . . . . . . . . .	L Near	 000003B6 _TEXT	
+  ERight . . . . . . . . . . . .	L Near	 000003D5 _TEXT	
+  L3 . . . . . . . . . . . . . .	L Near	 00000406 _TEXT	
+  Nothing  . . . . . . . . . . .	L Near	 0000042C _TEXT	
+  Done . . . . . . . . . . . . .	L Near	 00000440 _TEXT	
+  GameDone . . . . . . . . . . .	L Near	 0000046E _TEXT	
+displayCurrentHighScore  . . . .	P Near	 000000A2 _TEXT	Length= 00000047 Public STDCALL
+fancyColor . . . . . . . . . . .	P Near	 0000017F _TEXT	Length= 00000032 Public STDCALL
+  GoOn . . . . . . . . . . . . .	L Near	 00000180 _TEXT	
+  ChangeColor  . . . . . . . . .	L Near	 000001A9 _TEXT	
+getch  . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External C
+printf . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External C
+scanf  . . . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External C
+updateHighScore  . . . . . . . .	P Near	 00000000 _TEXT	Length= 000000A2 Public STDCALL
+  L1 . . . . . . . . . . . . . .	L Near	 0000002C _TEXT	
+  L2 . . . . . . . . . . . . . .	L Near	 00000038 _TEXT	
+  foundHigh  . . . . . . . . . .	L Near	 00000061 _TEXT	
+  unlucky  . . . . . . . . . . .	L Near	 00000090 _TEXT	
+updateSpeed  . . . . . . . . . .	P Near	 00000120 _TEXT	Length= 0000005F Public STDCALL
+  neverMind  . . . . . . . . . .	L Near	 0000017D _TEXT	
+wsprintfA  . . . . . . . . . . .	P Near	 00000000 FLAT	Length= 00000000 External C
+
+
+Symbols:
+
+                N a m e                 Type     Value    Attr
+
+@CodeSize  . . . . . . . . . . .	Number	 00000000h   
+@DataSize  . . . . . . . . . . .	Number	 00000000h   
+@Interface . . . . . . . . . . .	Number	 00000003h   
+@Model . . . . . . . . . . . . .	Number	 00000007h   
+@code  . . . . . . . . . . . . .	Text   	 _TEXT
+@data  . . . . . . . . . . . . .	Text   	 FLAT
+@fardata?  . . . . . . . . . . .	Text   	 FLAT
+@fardata . . . . . . . . . . . .	Text   	 FLAT
+@stack . . . . . . . . . . . . .	Text   	 FLAT
+ALT_MASK . . . . . . . . . . . .	Number	 00000003h   
+CAPSLOCK_ON  . . . . . . . . . .	Number	 00000080h   
+CREATE_ALWAYS  . . . . . . . . .	Number	 00000002h   
+CREATE_NEW . . . . . . . . . . .	Number	 00000001h   
+CTRL_MASK  . . . . . . . . . . .	Number	 0000000Ch   
+CreateFile . . . . . . . . . . .	Text   	 CreateFileA
+CurrentWidth . . . . . . . . . .	Byte	 00000071 _DATA	
+DO_NOT_SHARE . . . . . . . . . .	Number	 00000000h   
+ENABLE_ECHO_INPUT  . . . . . . .	Number	 00000004h   
+ENABLE_LINE_INPUT  . . . . . . .	Number	 00000002h   
+ENABLE_MOUSE_INPUT . . . . . . .	Number	 00000010h   
+ENABLE_PROCESSED_INPUT . . . . .	Number	 00000001h   
+ENABLE_PROCESSED_OUTPUT  . . . .	Number	 00000001h   
+ENABLE_WINDOW_INPUT  . . . . . .	Number	 00000008h   
+ENABLE_WRAP_AT_EOL_OUTPUT  . . .	Number	 00000002h   
+ENHANCED_KEY . . . . . . . . . .	Number	 00000100h   
+EndMessage . . . . . . . . . . .	Byte	 0000003B _DATA	
+FALSE  . . . . . . . . . . . . .	Number	 00000000h   
+FILE_APPEND_DATA . . . . . . . .	Number	 00000004h   
+FILE_ATTRIBUTE_ARCHIVE . . . . .	Number	 00000020h   
+FILE_ATTRIBUTE_COMPRESSED  . . .	Number	 00000800h   
+FILE_ATTRIBUTE_DEVICE  . . . . .	Number	 00000040h   
+FILE_ATTRIBUTE_DIRECTORY . . . .	Number	 00000010h   
+FILE_ATTRIBUTE_ENCRYPTED . . . .	Number	 00004000h   
+FILE_ATTRIBUTE_HIDDEN  . . . . .	Number	 00000002h   
+FILE_ATTRIBUTE_NORMAL  . . . . .	Number	 00000080h   
+FILE_ATTRIBUTE_NOT_CONTENT_INDEXED .	Number	 00002000h   
+FILE_ATTRIBUTE_OFFLINE . . . . .	Number	 00001000h   
+FILE_ATTRIBUTE_READONLY  . . . .	Number	 00000001h   
+FILE_ATTRIBUTE_REPARSE_POINT . .	Number	 00000400h   
+FILE_ATTRIBUTE_SPARSE_FILE . . .	Number	 00000200h   
+FILE_ATTRIBUTE_SYSTEM  . . . . .	Number	 00000004h   
+FILE_ATTRIBUTE_TEMPORARY . . . .	Number	 00000100h   
+FILE_BEGIN . . . . . . . . . . .	Number	 00000000h   
+FILE_CURRENT . . . . . . . . . .	Number	 00000001h   
+FILE_DELETE_CHILD  . . . . . . .	Number	 00000040h   
+FILE_END . . . . . . . . . . . .	Number	 00000002h   
+FILE_READ_DATA . . . . . . . . .	Number	 00000001h   
+FILE_SHARE_DELETE  . . . . . . .	Number	 00000004h   
+FILE_SHARE_READ  . . . . . . . .	Number	 00000001h   
+FILE_SHARE_WRITE . . . . . . . .	Number	 00000002h   
+FILE_WRITE_DATA  . . . . . . . .	Number	 00000002h   
+FOCUS_EVENT  . . . . . . . . . .	Number	 00000010h   
+FORMAT_MESSAGE_ALLOCATE_BUFFER .	Number	 00000100h   
+FORMAT_MESSAGE_FROM_SYSTEM . . .	Number	 00001000h   
+FormatMessage  . . . . . . . . .	Text   	 FormatMessageA
+GENERIC_ALL  . . . . . . . . . .	Number	 10000000h   
+GENERIC_EXECUTE  . . . . . . . .	Number	 20000000h   
+GENERIC_READ . . . . . . . . . .	Number	 -80000000h   
+GENERIC_WRITE  . . . . . . . . .	Number	 40000000h   
+GetCommandLine . . . . . . . . .	Text   	 GetCommandLineA
+HANDLE . . . . . . . . . . . . .	Text   	 DWORD
+HEAP_GENERATE_EXCEPTIONS . . . .	Number	 00000004h   
+HEAP_GROWABLE  . . . . . . . . .	Number	 00000002h   
+HEAP_NO_SERIALIZE  . . . . . . .	Number	 00000001h   
+HEAP_REALLOC_IN_PLACE_ONLY . . .	Number	 00000010h   
+HEAP_ZERO_MEMORY . . . . . . . .	Number	 00000008h   
+IDABORT  . . . . . . . . . . . .	Number	 00000003h   
+IDCANCEL . . . . . . . . . . . .	Number	 00000002h   
+IDCLOSE  . . . . . . . . . . . .	Number	 00000008h   
+IDCONTINUE . . . . . . . . . . .	Number	 0000000Bh   
+IDHELP . . . . . . . . . . . . .	Number	 00000009h   
+IDIGNORE . . . . . . . . . . . .	Number	 00000005h   
+IDNO . . . . . . . . . . . . . .	Number	 00000007h   
+IDOK . . . . . . . . . . . . . .	Number	 00000001h   
+IDRETRY  . . . . . . . . . . . .	Number	 00000004h   
+IDTIMEOUT  . . . . . . . . . . .	Number	 00007D00h   
+IDTRYAGAIN . . . . . . . . . . .	Number	 0000000Ah   
+IDYES  . . . . . . . . . . . . .	Number	 00000006h   
+INVALID_HANDLE_VALUE . . . . . .	Number	 -00000001h   
+KBDOWN_FLAG  . . . . . . . . . .	Number	 00000001h   
+KEY_EVENT  . . . . . . . . . . .	Number	 00000001h   
+KEY_MASKS  . . . . . . . . . . .	Number	 0000001Fh   
+LEFT_ALT_PRESSED . . . . . . . .	Number	 00000002h   
+LEFT_CTRL_PRESSED  . . . . . . .	Number	 00000008h   
+MB_ABORTRETRYIGNORE  . . . . . .	Number	 00000002h   
+MB_APPLMODAL . . . . . . . . . .	Number	 00000000h   
+MB_CANCELTRYCONTINUE . . . . . .	Number	 00000006h   
+MB_DEFBUTTON1  . . . . . . . . .	Number	 00000000h   
+MB_DEFBUTTON2  . . . . . . . . .	Number	 00000100h   
+MB_DEFBUTTON3  . . . . . . . . .	Number	 00000200h   
+MB_DEFBUTTON4  . . . . . . . . .	Number	 00000300h   
+MB_HELP  . . . . . . . . . . . .	Number	 00004000h   
+MB_ICONASTERISK  . . . . . . . .	Number	 00000040h   
+MB_ICONERROR . . . . . . . . . .	Number	 00000010h   
+MB_ICONEXCLAMATION . . . . . . .	Number	 00000030h   
+MB_ICONHAND  . . . . . . . . . .	Number	 00000010h   
+MB_ICONINFORMATION . . . . . . .	Number	 00000040h   
+MB_ICONQUESTION  . . . . . . . .	Number	 00000020h   
+MB_ICONSTOP  . . . . . . . . . .	Number	 00000010h   
+MB_ICONWARNING . . . . . . . . .	Number	 00000030h   
+MB_OKCANCEL  . . . . . . . . . .	Number	 00000001h   
+MB_OK  . . . . . . . . . . . . .	Number	 00000000h   
+MB_RETRYCANCEL . . . . . . . . .	Number	 00000005h   
+MB_SYSTEMMODAL . . . . . . . . .	Number	 00001000h   
+MB_TASKMODAL . . . . . . . . . .	Number	 00002000h   
+MB_USERICON  . . . . . . . . . .	Number	 00000080h   
+MB_YESNOCANCEL . . . . . . . . .	Number	 00000003h   
+MB_YESNO . . . . . . . . . . . .	Number	 00000004h   
+MENU_EVENT . . . . . . . . . . .	Number	 00000008h   
+MOUSE_EVENT  . . . . . . . . . .	Number	 00000002h   
+MessageBox . . . . . . . . . . .	Text   	 MessageBoxA
+NULL . . . . . . . . . . . . . .	Number	 00000000h   
+NUMLOCK_ON . . . . . . . . . . .	Number	 00000020h   
+OPEN_ALWAYS  . . . . . . . . . .	Number	 00000004h   
+OPEN_EXISTING  . . . . . . . . .	Number	 00000003h   
+PeekConsoleInput . . . . . . . .	Text   	 PeekConsoleInputA
+RIGHT_ALT_PRESSED  . . . . . . .	Number	 00000001h   
+RIGHT_CTRL_PRESSED . . . . . . .	Number	 00000004h   
+ReadConsoleInput . . . . . . . .	Text   	 ReadConsoleInputA
+ReadConsole  . . . . . . . . . .	Text   	 ReadConsoleA
+SCROLLLOCK_ON  . . . . . . . . .	Number	 00000040h   
+SHIFT_MASK . . . . . . . . . . .	Number	 00000010h   
+SHIFT_PRESSED  . . . . . . . . .	Number	 00000010h   
+STD_ERROR_HANDLE . . . . . . . .	Number	 -0000000Ch   
+STD_INPUT_HANDLE . . . . . . . .	Number	 -0000000Ah   
+STD_OUTPUT_HANDLE  . . . . . . .	Number	 -0000000Bh   
+SetConsoleTitle  . . . . . . . .	Text   	 SetConsoleTitleA
+TAB  . . . . . . . . . . . . . .	Number	 00000009h   
+TRUE . . . . . . . . . . . . . .	Number	 00000001h   
+TRUNCATE_EXISTING  . . . . . . .	Number	 00000005h   
+VK_11  . . . . . . . . . . . . .	Number	 000000BDh   
+VK_12  . . . . . . . . . . . . .	Number	 000000BBh   
+VK_ADD . . . . . . . . . . . . .	Number	 0000006Bh   
+VK_BACK  . . . . . . . . . . . .	Number	 00000008h   
+VK_CANCEL  . . . . . . . . . . .	Number	 00000003h   
+VK_CAPITAL . . . . . . . . . . .	Number	 00000014h   
+VK_CLEAR . . . . . . . . . . . .	Number	 0000000Ch   
+VK_CONTROL . . . . . . . . . . .	Number	 00000011h   
+VK_DECIMAL . . . . . . . . . . .	Number	 0000006Eh   
+VK_DELETE  . . . . . . . . . . .	Number	 0000002Eh   
+VK_DIVIDE  . . . . . . . . . . .	Number	 0000006Fh   
+VK_DOWN  . . . . . . . . . . . .	Number	 00000028h   
+VK_END . . . . . . . . . . . . .	Number	 00000023h   
+VK_ESCAPE  . . . . . . . . . . .	Number	 0000001Bh   
+VK_EXECUTE . . . . . . . . . . .	Number	 0000002Bh   
+VK_F10 . . . . . . . . . . . . .	Number	 00000079h   
+VK_F11 . . . . . . . . . . . . .	Number	 0000007Ah   
+VK_F12 . . . . . . . . . . . . .	Number	 0000007Bh   
+VK_F13 . . . . . . . . . . . . .	Number	 0000007Ch   
+VK_F14 . . . . . . . . . . . . .	Number	 0000007Dh   
+VK_F15 . . . . . . . . . . . . .	Number	 0000007Eh   
+VK_F16 . . . . . . . . . . . . .	Number	 0000007Fh   
+VK_F17 . . . . . . . . . . . . .	Number	 00000080h   
+VK_F18 . . . . . . . . . . . . .	Number	 00000081h   
+VK_F19 . . . . . . . . . . . . .	Number	 00000082h   
+VK_F1  . . . . . . . . . . . . .	Number	 00000070h   
+VK_F20 . . . . . . . . . . . . .	Number	 00000083h   
+VK_F21 . . . . . . . . . . . . .	Number	 00000084h   
+VK_F22 . . . . . . . . . . . . .	Number	 00000085h   
+VK_F23 . . . . . . . . . . . . .	Number	 00000086h   
+VK_F24 . . . . . . . . . . . . .	Number	 00000087h   
+VK_F2  . . . . . . . . . . . . .	Number	 00000071h   
+VK_F3  . . . . . . . . . . . . .	Number	 00000072h   
+VK_F4  . . . . . . . . . . . . .	Number	 00000073h   
+VK_F5  . . . . . . . . . . . . .	Number	 00000074h   
+VK_F6  . . . . . . . . . . . . .	Number	 00000075h   
+VK_F7  . . . . . . . . . . . . .	Number	 00000076h   
+VK_F8  . . . . . . . . . . . . .	Number	 00000077h   
+VK_F9  . . . . . . . . . . . . .	Number	 00000078h   
+VK_HELP  . . . . . . . . . . . .	Number	 0000002Fh   
+VK_HOME  . . . . . . . . . . . .	Number	 00000024h   
+VK_INSERT  . . . . . . . . . . .	Number	 0000002Dh   
+VK_LBUTTON . . . . . . . . . . .	Number	 00000001h   
+VK_LCONTROL  . . . . . . . . . .	Number	 000000A2h   
+VK_LEFT  . . . . . . . . . . . .	Number	 00000025h   
+VK_LMENU . . . . . . . . . . . .	Number	 000000A4h   
+VK_LSHIFT  . . . . . . . . . . .	Number	 000000A0h   
+VK_MENU  . . . . . . . . . . . .	Number	 00000012h   
+VK_MULTIPLY  . . . . . . . . . .	Number	 0000006Ah   
+VK_NEXT  . . . . . . . . . . . .	Number	 00000022h   
+VK_NUMLOCK . . . . . . . . . . .	Number	 00000090h   
+VK_NUMPAD0 . . . . . . . . . . .	Number	 00000060h   
+VK_NUMPAD1 . . . . . . . . . . .	Number	 00000061h   
+VK_NUMPAD2 . . . . . . . . . . .	Number	 00000062h   
+VK_NUMPAD3 . . . . . . . . . . .	Number	 00000063h   
+VK_NUMPAD4 . . . . . . . . . . .	Number	 00000064h   
+VK_NUMPAD5 . . . . . . . . . . .	Number	 00000065h   
+VK_NUMPAD6 . . . . . . . . . . .	Number	 00000066h   
+VK_NUMPAD7 . . . . . . . . . . .	Number	 00000067h   
+VK_NUMPAD8 . . . . . . . . . . .	Number	 00000068h   
+VK_NUMPAD9 . . . . . . . . . . .	Number	 00000069h   
+VK_PAUSE . . . . . . . . . . . .	Number	 00000013h   
+VK_PRINT . . . . . . . . . . . .	Number	 0000002Ah   
+VK_PRIOR . . . . . . . . . . . .	Number	 00000021h   
+VK_RBUTTON . . . . . . . . . . .	Number	 00000002h   
+VK_RCONTROL  . . . . . . . . . .	Number	 000000A3h   
+VK_RETURN  . . . . . . . . . . .	Number	 0000000Dh   
+VK_RIGHT . . . . . . . . . . . .	Number	 00000027h   
+VK_RMENU . . . . . . . . . . . .	Number	 000000A5h   
+VK_RSHIFT  . . . . . . . . . . .	Number	 000000A1h   
+VK_SCROLL  . . . . . . . . . . .	Number	 00000091h   
+VK_SEPARATER . . . . . . . . . .	Number	 0000006Ch   
+VK_SHIFT . . . . . . . . . . . .	Number	 00000010h   
+VK_SNAPSHOT  . . . . . . . . . .	Number	 0000002Ch   
+VK_SPACE . . . . . . . . . . . .	Number	 00000020h   
+VK_SUBTRACT  . . . . . . . . . .	Number	 0000006Dh   
+VK_TAB . . . . . . . . . . . . .	Number	 00000009h   
+VK_UP  . . . . . . . . . . . . .	Number	 00000026h   
+WINDOW_BUFFER_SIZE_EVENT . . . .	Number	 00000004h   
+WriteConsoleOutputCharacter  . .	Text   	 WriteConsoleOutputCharacterA
+WriteConsole . . . . . . . . . .	Text   	 WriteConsoleA
+black  . . . . . . . . . . . . .	Number	 00000000h   
+blue . . . . . . . . . . . . . .	Number	 00000001h   
+brown  . . . . . . . . . . . . .	Number	 00000006h   
+bufferSIZE . . . . . . . . . . .	Number	 00000003h   
+buffer . . . . . . . . . . . . .	Byte	 00000083 _DATA	
+currentColor . . . . . . . . . .	Byte	 00000074 _DATA	
+currentLeft  . . . . . . . . . .	Byte	 0000006F _DATA	
+currentRight . . . . . . . . . .	Byte	 00000070 _DATA	
+currentY . . . . . . . . . . . .	Byte	 00000073 _DATA	
+cursorMax  . . . . . . . . . . .	Number	 00000033h   
+cyan . . . . . . . . . . . . . .	Number	 00000003h   
+exit . . . . . . . . . . . . . .	Text   	 INVOKE ExitProcess,0
+fileHandle . . . . . . . . . . .	DWord	 00000087 _DATA	
+filename . . . . . . . . . . . .	Byte	 00000075 _DATA	
+gray . . . . . . . . . . . . . .	Number	 00000008h   
+green  . . . . . . . . . . . . .	Number	 00000002h   
+highScore  . . . . . . . . . . .	Byte	 00000086 _DATA	
+intromessage . . . . . . . . . .	Byte	 00000008 _DATA	
+lagCheckLow  . . . . . . . . . .	Word	 00000000 _DATA	
+lagCheck . . . . . . . . . . . .	Word	 00000004 _DATA	
+lagCounter . . . . . . . . . . .	Byte	 00000006 _DATA	
+lagLow . . . . . . . . . . . . .	Word	 00000002 _DATA	
+lag  . . . . . . . . . . . . . .	Byte	 00000007 _DATA	
+lightBlue  . . . . . . . . . . .	Number	 00000009h   
+lightCyan  . . . . . . . . . . .	Number	 0000000Bh   
+lightGray  . . . . . . . . . . .	Number	 00000007h   
+lightGreen . . . . . . . . . . .	Number	 0000000Ah   
+lightMagenta . . . . . . . . . .	Number	 0000000Dh   
+lightRed . . . . . . . . . . . .	Number	 0000000Ch   
+magenta  . . . . . . . . . . . .	Number	 00000005h   
+maxRight . . . . . . . . . . . .	Number	 00000032h   
+message1 . . . . . . . . . . . .	Byte	 00000046 _DATA	
+oldLeft  . . . . . . . . . . . .	Byte	 0000006D _DATA	
+oldRight . . . . . . . . . . . .	Byte	 0000006E _DATA	
+prevLeft . . . . . . . . . . . .	Byte	 0000006B _DATA	
+prevRight  . . . . . . . . . . .	Byte	 0000006C _DATA	
+red  . . . . . . . . . . . . . .	Number	 00000004h   
+startWidth . . . . . . . . . . .	Number	 00000028h   
+successMessage . . . . . . . . .	Byte	 0000005B _DATA	
+velocity . . . . . . . . . . . .	Byte	 00000072 _DATA	
+white  . . . . . . . . . . . . .	Number	 0000000Fh   
+wsprintf . . . . . . . . . . . .	Text   	 wsprintfA
+yellow . . . . . . . . . . . . .	Number	 0000000Eh   
+
+	   0 Warnings
+	   0 Errors
